@@ -1,0 +1,21 @@
+<odoo>
+  <record id="view_product_configurator_wizard" model="ir.ui.view">
+    <field name="name">product.configurator.wizard.form</field>
+    <field name="model">product.configurator.wizard</field>
+    <field name="arch" type="xml">
+      <form string="Product Configurator">
+        <group>
+          <field name="product_tmpl_id"/>
+          <field name="attribute_value_ids" widget="many2many_tags"/>
+          <field name="existing_product_id" invisible="1"/>
+          <field name="default_code" attrs="{'invisible': [('existing_product_id', '!=', False)]}"/>
+          <field name="barcode" attrs="{'invisible': [('existing_product_id', '!=', False)]}"/>
+        </group>
+        <footer>
+          <button string="Create Variant" type="object" name="create_variant" class="btn-primary"/>
+          <button string="Cancel" class="btn-secondary" special="cancel"/>
+        </footer>
+      </form>
+    </field>
+  </record>
+</odoo>

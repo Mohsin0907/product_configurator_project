@@ -1,0 +1,9 @@
+<odoo>
+  <menuitem id="menu_product_configurator_root" name="Product Configurator" sequence="10"/>
+  <act_window id="action_product_configurator"
+              name="Configure Product"
+              res_model="product.configurator.wizard"
+              view_mode="form"
+              target="new"
+              menu_id="menu_product_configurator_root"/>
+</odoo>
