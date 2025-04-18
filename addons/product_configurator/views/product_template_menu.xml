@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <menuitem id="product_configurator_menu_root"
+            name="Product Configurator"
+            sequence="10"
+            app="True"/>
+  <menuitem id="product_configurator_menu"
+            name="Configure Product"
+            parent="product_configurator_menu_root"
+            action="action_product_configurator_wizard"
+            sequence="20"/>
+</odoo>

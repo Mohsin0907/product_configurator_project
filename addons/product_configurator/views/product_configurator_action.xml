@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <record id="action_product_configurator_wizard"
+          model="ir.actions.act_window">
+    <field name="name">Configure Product</field>
+    <field name="res_model">product.configurator.wizard</field>
+    <field name="view_mode">form</field>
+    <field name="target">new</field>
+  </record>
+</odoo>

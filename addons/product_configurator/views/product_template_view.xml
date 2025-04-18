@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <record id="view_product_template_form_inherit_configurator" model="ir.ui.view">
+    <field name="name">product.template.form.configurator</field>
+    <field name="model">product.template</field>
+    <!-- Inherit the correct CE form view -->
+    <field name="inherit_id" ref="product.product_template_form_view"/>
+    <field name="arch" type="xml">
+      <!-- Insert your Test Configuration button into the header -->
+      <xpath expr="//header" position="inside">
+        <button name="open_configurator_wizard"
+                string="Test Configuration"
+                type="object"
+                class="btn-primary"/>
+      </xpath>
+    </field>
+  </record>
+</odoo>
