@@ -117,6 +117,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
             [KeyboardButton("✨ Create Variant for a Product")],
             [KeyboardButton("📦 Check On-hand Quantity")],
             [KeyboardButton("📋 List available Variants of a Product")],
+            [KeyboardButton("🛒 Create Purchase Order")],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
@@ -149,6 +150,7 @@ def fmt_qty_item(p: dict) -> str:
 # =========================
 SEARCH, PICK_TEMPLATE, PICK_ATTR, ASK_CODE, ASK_BARCODE = range(5)
 LV_ASK_NAME, LV_PICK_TEMPLATE = range(100, 102)
+PO_ASK_SUPPLIER, PO_ASK_PRODUCT, PO_ASK_QTY, PO_ASK_PRICE, PO_ASK_MORE, PO_REVIEW = range(200, 206)
 
 # =========================
 # Keyboards
@@ -739,6 +741,272 @@ async def lv_on_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return LV_PICK_TEMPLATE
 
 # =========================
+# Purchase Order Flow
+# =========================
+async def po_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry point for purchase order creation"""
+    context.user_data.clear()
+    await update.message.reply_text(
+        "🛒 <b>Create Purchase Order</b>\n\n"
+        "Please enter the supplier/vendor name:",
+        parse_mode="HTML"
+    )
+    return PO_ASK_SUPPLIER
+
+async def po_on_supplier(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle supplier input"""
+    supplier_name = (update.message.text or "").strip()
+    if not supplier_name:
+        await update.message.reply_text("Please enter a valid supplier name.")
+        return PO_ASK_SUPPLIER
+    
+    # Store supplier name for now (we'll need to implement supplier search)
+    context.user_data["supplier_name"] = supplier_name
+    
+    await update.message.reply_text(
+        f"✅ Supplier: <b>{html_escape(supplier_name)}</b>\n\n"
+        "Now enter the product name or code:",
+        parse_mode="HTML"
+    )
+    return PO_ASK_PRODUCT
+
+async def po_on_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle product input"""
+    product_query = (update.message.text or "").strip()
+    if not product_query:
+        await update.message.reply_text("Please enter a valid product name or code.")
+        return PO_ASK_PRODUCT
+    
+    # Search for product
+    res = gw_post("/config/start", {"query": product_query, "created_by": CREATED_BY})
+    if not res.get("ok"):
+        await update.message.reply_text(f"Product search failed:\n{res.get('message')}")
+        return PO_ASK_PRODUCT
+    
+    matches = res.get("matches") or []
+    if not matches:
+        await update.message.reply_text("No products found. Try another name or /cancel.")
+        return PO_ASK_PRODUCT
+    
+    if len(matches) == 1:
+        # Single match, use it
+        product = matches[0]
+        context.user_data["product_id"] = product["id"]
+        context.user_data["product_name"] = product.get("name") or f"Product {product['id']}"
+        
+        await update.message.reply_text(
+            f"✅ Product: <b>{html_escape(context.user_data['product_name'])}</b>\n\n"
+            "Enter the quantity to order:",
+            parse_mode="HTML"
+        )
+        return PO_ASK_QTY
+    else:
+        # Multiple matches, let user choose
+        context.user_data["product_matches"] = matches
+        context.user_data["product_page"] = 0
+        
+        kb = build_template_keyboard(matches, page=0)
+        await update.message.reply_text(
+            f"🔎 <b>Found {len(matches)} products</b> for \"{html_escape(product_query)}\". Pick one:",
+            reply_markup=kb, parse_mode="HTML"
+        )
+        return PO_ASK_PRODUCT
+
+async def po_on_qty(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle quantity input"""
+    try:
+        qty = float((update.message.text or "").strip())
+        if qty <= 0:
+            await update.message.reply_text("Quantity must be positive. Please try again.")
+            return PO_ASK_QTY
+    except ValueError:
+        await update.message.reply_text("Please enter a valid number for quantity.")
+        return PO_ASK_QTY
+    
+    context.user_data["quantity"] = qty
+    
+    await update.message.reply_text(
+        f"✅ Quantity: <b>{qty}</b>\n\n"
+        "Enter the unit price:",
+        parse_mode="HTML"
+    )
+    return PO_ASK_PRICE
+
+async def po_on_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle price input"""
+    try:
+        price = float((update.message.text or "").strip())
+        if price < 0:
+            await update.message.reply_text("Price cannot be negative. Please try again.")
+            return PO_ASK_PRICE
+    except ValueError:
+        await update.message.reply_text("Please enter a valid number for price.")
+        return PO_ASK_PRICE
+    
+    context.user_data["price"] = price
+    
+    # Store the first order line
+    context.user_data["order_lines"] = [{
+        "product_id": context.user_data["product_id"],
+        "name": context.user_data["product_name"],
+        "product_qty": context.user_data["quantity"],
+        "price_unit": context.user_data["price"],
+        "product_uom": 1  # Default UoM (we can enhance this later)
+    }]
+    
+    await update.message.reply_text(
+        f"✅ Price: <b>${price:.2f}</b>\n\n"
+        "Do you want to add more products to this order?\n"
+        "Reply with 'yes' to add more, or 'no' to review the order.",
+        parse_mode="HTML"
+    )
+    return PO_ASK_MORE
+
+async def po_on_more(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle whether to add more products"""
+    response = (update.message.text or "").strip().lower()
+    
+    if response in ['yes', 'y', 'more', 'add']:
+        await update.message.reply_text(
+            "Enter the next product name or code:"
+        )
+        return PO_ASK_PRODUCT
+    elif response in ['no', 'n', 'done', 'finish']:
+        # Show order review
+        return await _show_po_review(update, context)
+    else:
+        await update.message.reply_text(
+            "Please reply with 'yes' to add more products or 'no' to finish."
+        )
+        return PO_ASK_MORE
+
+async def _show_po_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show purchase order review"""
+    order_lines = context.user_data.get("order_lines", [])
+    supplier = context.user_data.get("supplier_name", "Unknown")
+    
+    total = sum(line["product_qty"] * line["price_unit"] for line in order_lines)
+    
+    review_text = (
+        f"📋 <b>Purchase Order Review</b>\n\n"
+        f"<b>Supplier:</b> {html_escape(supplier)}\n"
+        f"<b>Total Items:</b> {len(order_lines)}\n"
+        f"<b>Total Amount:</b> ${total:.2f}\n\n"
+        f"<b>Order Lines:</b>\n"
+    )
+    
+    for i, line in enumerate(order_lines, 1):
+        review_text += (
+            f"{i}. {html_escape(line['name'])}\n"
+            f"   Qty: {line['product_qty']} × ${line['price_unit']:.2f} = ${line['product_qty'] * line['price_unit']:.2f}\n\n"
+        )
+    
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Confirm Order", callback_data="confirm")],
+        [InlineKeyboardButton("➕ Add More Products", callback_data="add_more")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
+    ])
+    
+    await update.message.reply_text(review_text, reply_markup=kb, parse_mode="HTML")
+    return PO_REVIEW
+
+async def po_on_product_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle product selection from multiple matches"""
+    await fast_ack(update)
+    cq = update.callback_query
+    data = cq.data or ""
+    
+    if data.startswith("tpl:"):
+        tpl_id = int(data.split(":")[1])
+        matches = context.user_data.get("product_matches", [])
+        
+        # Find the selected product
+        selected_product = None
+        for match in matches:
+            if match["id"] == tpl_id:
+                selected_product = match
+                break
+        
+        if selected_product:
+            context.user_data["product_id"] = selected_product["id"]
+            context.user_data["product_name"] = selected_product.get("name") or f"Product {selected_product['id']}"
+            
+            await cq.message.edit_text(
+                f"✅ Product: <b>{html_escape(context.user_data['product_name'])}</b>\n\n"
+                "Enter the quantity to order:",
+                parse_mode="HTML"
+            )
+            return PO_ASK_QTY
+        else:
+            await cq.message.edit_text("❌ Product not found. Please try again.")
+            return PO_ASK_PRODUCT
+    
+    return PO_ASK_PRODUCT
+
+async def po_on_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle review callback"""
+    await fast_ack(update)
+    cq = update.callback_query
+    data = cq.data or ""
+    
+    if data == "confirm":
+        # Create the purchase order
+        await _create_purchase_order(update, context)
+        return ConversationHandler.END
+    elif data == "add_more":
+        await cq.message.edit_text("Enter the next product name or code:")
+        return PO_ASK_PRODUCT
+    elif data == "cancel":
+        await cq.message.edit_text("❌ Purchase order cancelled.")
+        await cq.message.reply_text("Choose a service:", reply_markup=main_menu_kb())
+        return ConversationHandler.END
+    
+    return PO_REVIEW
+
+async def _create_purchase_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Actually create the purchase order via gateway"""
+    try:
+        # For now, we'll use a placeholder partner_id (1)
+        # In a real implementation, you'd search for the supplier
+        payload = {
+            "partner_id": 1,  # TODO: Implement supplier search
+            "order_lines": context.user_data.get("order_lines", []),
+            "created_by": CREATED_BY
+        }
+        
+        res = gw_post("/purchase/create", payload)
+        
+        if res.get("ok"):
+            order_name = res.get("order_name", "Unknown")
+            await update.callback_query.message.edit_text(
+                f"✅ <b>Purchase Order Created Successfully!</b>\n\n"
+                f"<b>Order:</b> {html_escape(order_name)}\n"
+                f"<b>Status:</b> Draft\n\n"
+                f"Your purchase order has been created and is ready for approval.",
+                parse_mode="HTML"
+            )
+        else:
+            await update.callback_query.message.edit_text(
+                f"❌ <b>Failed to Create Purchase Order</b>\n\n"
+                f"Error: {html_escape(res.get('message', 'Unknown error'))}",
+                parse_mode="HTML"
+            )
+        
+        await update.callback_query.message.reply_text(
+            "Choose a service:", reply_markup=main_menu_kb()
+        )
+        
+    except Exception as e:
+        await update.callback_query.message.edit_text(
+            f"❌ <b>Error Creating Purchase Order</b>\n\n"
+            f"An unexpected error occurred: {html_escape(str(e))}",
+            parse_mode="HTML"
+        )
+        await update.callback_query.message.reply_text(
+            "Choose a service:", reply_markup=main_menu_kb()
+        )
+
+# =========================
 # Conversation builders
 # =========================
 def variant_conversation() -> ConversationHandler:
@@ -778,6 +1046,26 @@ def list_variants_conversation() -> ConversationHandler:
         persistent=False,
     )
 
+def purchase_order_conversation() -> ConversationHandler:
+    return ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex(r"^🛒 Create Purchase Order$"), po_entry)],
+        states={
+            PO_ASK_SUPPLIER: [MessageHandler(filters.TEXT & ~filters.COMMAND, po_on_supplier)],
+            PO_ASK_PRODUCT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, po_on_product),
+                CallbackQueryHandler(po_on_product_select, pattern=r"^tpl:\d+$")
+            ],
+            PO_ASK_QTY: [MessageHandler(filters.TEXT & ~filters.COMMAND, po_on_qty)],
+            PO_ASK_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, po_on_price)],
+            PO_ASK_MORE: [MessageHandler(filters.TEXT & ~filters.COMMAND, po_on_more)],
+            PO_REVIEW: [CallbackQueryHandler(po_on_review, pattern=r"^(confirm|add_more|cancel)$")],
+        },
+        fallbacks=[CommandHandler("cancel", cmd_cancel)],
+        allow_reentry=True,
+        name="purchase_order_flow",
+        persistent=False,
+    )
+
 # =========================
 # main
 # =========================
@@ -793,11 +1081,15 @@ def main():
     # Menu buttons → flows
     app.add_handler(variant_conversation())
     app.add_handler(list_variants_conversation())
+    app.add_handler(purchase_order_conversation())
     app.add_handler(MessageHandler(filters.Regex(r"^📦 Check On-hand Quantity$"), qty_entry))
 
     # Also keep /qtylist command + its follow-up (requires reply to prompt)
     app.add_handler(CommandHandler("qtylist", cmd_qtylist))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_qtylist_text), group=1)
+    
+    # Purchase order command
+    app.add_handler(CommandHandler("purchase", po_entry))
 
     app.add_error_handler(on_error)
     log.info("Starting Sicli-Bot…")
