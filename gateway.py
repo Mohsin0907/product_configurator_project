@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from dotenv import dotenv_values
 
 from stock_router import router as stock_router  # qty/check endpoints
+from purchase_router import router as purchase_router  # purchase order endpoints
 
 # -----------------------
 # Load .env from THIS FOLDER (BOM-safe & robust on Windows)
@@ -96,6 +97,9 @@ client = OdooClient(ODOO_URL, ODOO_DB, ODOO_USER, ODOO_PASSWORD)
 
 # Mount stock endpoints (/qty/check)
 app.include_router(stock_router, prefix="/qty", tags=["stock"])
+
+# Mount purchase order endpoints (/purchase/*)
+app.include_router(purchase_router, prefix="/purchase", tags=["purchase"])
 
 @app.get("/health")
 def health():
